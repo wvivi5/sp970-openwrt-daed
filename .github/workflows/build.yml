@@ -276,11 +276,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: sp970-daed-docker-${{ needs.resolve-version.outputs.openwrt_version }}-${{ env.FILE_DATE }}
+          # 第9坑: ext4 镜像实际产物是 .gz(ext4-boot.img.gz/-system.img.gz/-sysupgrade.bin.gz),
+          # 原 glob 只匹配无 .gz 名 → run 31634725918 虽 success 但 artifact 只有 flash.sh/zip/manifest,
+          # 核心 ext4 rootfs 镜像漏传。改为同时匹配压缩/未压缩两种命名。
           path: |
-            ${{ env.FW }}/openwrt-msm89xx-*-ext4-boot.img
-            ${{ env.FW }}/openwrt-msm89xx-*-ext4-system.img
-            ${{ env.FW }}/openwrt-msm89xx-*-ext4-sysupgrade.bin
+            ${{ env.FW }}/openwrt-msm89xx-*-ext4-boot.img*
+            ${{ env.FW }}/openwrt-msm89xx-*-ext4-system.img*
+            ${{ env.FW }}/openwrt-msm89xx-*-ext4-sysupgrade.bin*
             ${{ env.FW }}/openwrt-msm89xx-*-flash.sh
             ${{ env.FW }}/openwrt-msm89xx-*-firmware.zip
             ${{ env.FW }}/openwrt-msm89xx-*.manifest
-          if-no-files-found: warn
+          if-no-files-found: error
