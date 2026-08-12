@@ -1,5 +1,7 @@
 # sp970-openwrt-daed
 
+> 📌 **刷机方式看这里 → [docs/FLASH.md](docs/FLASH.md)**（含 3 号机实测分区表铁证：从 HandsomeMod 刷本固件必须走 EDL，纯 fastboot 会变砖）
+
 为 **Handsome OpenStick SP970**（高通 MSM8916 / 骁龙410 随身WiFi，eMMC 版）构建一版
 **开启 BTF + eBPF + clsact** 的现代 OpenWrt 固件，目标是能原生跑 **daed（大鹅，dae 内核级透明代理）**。
 
