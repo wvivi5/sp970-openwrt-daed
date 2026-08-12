@@ -1,0 +1,36 @@
+# ================================================================
+# MT7601U 外置 USB WiFi 网卡 —— v2 增量（暂未并入主 config）
+# ================================================================
+# 用户 2026-08-11 决策 A：当前 v1 固件（daed+Passwall+Docker）先编完出货，
+# 不含 MT7601。此文件是 v2 备用增量，等 v1 验证通过后再并入
+# config/packages-daed-passwall-docker.config 重编一版。
+#
+# 背景：360随身WiFi = 联发科 MT7601 芯片。板载 wcn36xx AP 模式锁 6.5M
+# 下行是硬件 bug，外置 MT7601 网卡发热点不受影响。物理插口通过 USB hub
+# 解决（用户已确认）。mt7601u 主线驱动 + 官方固件 blob，无需手搓交叉编译。
+#
+# 并入方式：把下面 CONFIG_ 行追加到 config/packages-daed-passwall-docker.config
+# 的「daed / tc-bpf 运行时用户态工具」段之后，然后 commit + push 触发编译。
+# ----------------------------------------------------------------
+
+# MT7601U 驱动 + 固件
+CONFIG_PACKAGE_kmod-mt7601u=y
+CONFIG_PACKAGE_mt7601u-firmware=y
+
+# 免驱「光驱」坑：360WiFi 插上默认伪装成 U盘/光驱(idVendor 148f 之类)，
+# 需 usb-modeswitch 切成网卡模式才认；OpenWrt 有现成 usb-modeswitch 及数据库。
+CONFIG_PACKAGE_usb-modeswitch=y
+CONFIG_PACKAGE_kmod-usb-net=y
+
+# 外置网卡当 AP 发热点需要 hostapd 全功能 + wpad-openssl 支持 WPA2；
+# 若与基线 wpad 冲突，make defconfig 会自动取舍。
+CONFIG_PACKAGE_wpad-openssl=y
+
+# ----------------------------------------------------------------
+# 上机后要做的运行时配置（刷完带 MT7601 的固件后）：
+# 1) 确认识别：插网卡后 dmesg | grep mt7601u，出现 wlanX 接口
+# 2) 若被识别成光驱/U盘：usb_modeswitch 切换（OpenWrt 数据库多数已含 360/MT7601 规则）
+# 3) 建 AP：uci 配 wireless 新 radio（band=2g，MT7601 只 2.4G），
+#    wpad-openssl 提供 WPA2，SSID/密码自定，htmode HT40
+# 4) 速率：MT7601 单流 150M/2.4G，比板载 wcn36xx 的 6.5M 强很多
+# ----------------------------------------------------------------

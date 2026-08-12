@@ -1,0 +1,20 @@
+# daed 默认 UCI 配置（刷机后落地到 /etc/config/daed）
+# 仅作起步模板；实际节点/订阅请在 LuCI 面板或 wing.db 里配。
+# 复用 H618 大鹅经验：默认分流规则够用（cn 直连，其余走代理）。
+
+config daed 'config'
+	option enabled '0'          # 首启先别自动起，验证三门槛后再开
+	option global_log_level 'info'
+	# Web UI 默认监听（参考 H618：127.0.0.1:2023）
+	option listen '127.0.0.1:2023'
+
+# 说明：
+# - daed 的 routing/dns/node/group 存在 SQLite 库（H618 上是 /etc/daed/wing.db，
+#   表名都是复数：routings/configs/nodes/groups/dns，selected=1 那行生效）。
+# - 默认 routing（够用，无需改）：
+#     pname 系统DNS -> must_direct
+#     dip geoip:private -> direct
+#     dip geoip:cn -> direct
+#     domain geosite:cn -> direct
+#     fallback -> proxy
+# - 缺广告拦截，按需再加。

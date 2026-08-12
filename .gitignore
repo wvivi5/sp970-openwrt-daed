@@ -1,0 +1,13 @@
+# build artifacts
+bin/
+build_dir/
+staging_dir/
+tmp/
+upstream/
+*.bin
+*.img
+backup*.bin
+backup*.img
+dl/
+.config
+.config.old
