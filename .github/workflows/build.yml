@@ -204,6 +204,24 @@ jobs:
           # CONFIG_BPF_TOOLCHAIN_NONE is not set
           EOF
           make defconfig
+          # === ext4 单分区根：必须启用 CONFIG_TARGET_ROOTFS_EXT4FS ===
+          # 第7次失败根因：Device FILESYSTEMS 改成 ext4 后，image.mk 的
+          #   $(foreach fs,$(filter ...,$(TARGET_FILESYSTEMS)),$(FILESYSTEMS)) 循环
+          #   会用 TARGET_FILESYSTEMS 过滤 device 的 FILESYSTEMS。若 .config 里
+          #   CONFIG_TARGET_ROOTFS_EXT4FS 未开，TARGET_FILESYSTEMS 不含 ext4，
+          #   循环跑 0 次 → `<device>-images` 目标从未定义 → ARTIFACT(flash.sh)
+          #   依赖它 → "No rule to make target 'yiming-uz801v3-images'"。
+          # 修法：显式开 EXT4FS、关 SQUASHFS 根文件系统，再 defconfig 固化。
+          sed -i -e '/CONFIG_TARGET_ROOTFS_EXT4FS/d' -e '/CONFIG_TARGET_ROOTFS_SQUASHFS/d' .config
+          cat >> .config <<'EOF'
+          CONFIG_TARGET_ROOTFS_EXT4FS=y
+          # CONFIG_TARGET_ROOTFS_SQUASHFS is not set
+          EOF
+          make defconfig
+          echo "=== 根文件系统选择确认（须 EXT4FS=y）==="
+          grep -E 'CONFIG_TARGET_ROOTFS_EXT4FS|CONFIG_TARGET_ROOTFS_SQUASHFS' .config || true
+          grep -q '^CONFIG_TARGET_ROOTFS_EXT4FS=y' .config \
+            || { echo "!! FATAL: EXT4FS 根未启用，image.mk 不会生成 <device>-images 目标"; exit 1; }
           echo "=== BPF 工具链选择确认 ==="
           grep -E "BPF_TOOLCHAIN|USE_LLVM|CONFIG_DEVEL" .config || true
           # 快速失败门禁已降级为软警告：真正保障靠第74步源码 patch（bpf.mk 写死 /usr/bin/clang），
@@ -243,9 +261,9 @@ jobs:
         with:
           name: sp970-daed-docker-${{ needs.resolve-version.outputs.openwrt_version }}-${{ env.FILE_DATE }}
           path: |
-            ${{ env.FW }}/openwrt-msm89xx-*-squashfs-gpt_both0.bin
-            ${{ env.FW }}/openwrt-msm89xx-*-squashfs-boot.img
-            ${{ env.FW }}/openwrt-msm89xx-*-squashfs-system.img
+            ${{ env.FW }}/openwrt-msm89xx-*-ext4-boot.img
+            ${{ env.FW }}/openwrt-msm89xx-*-ext4-system.img
+            ${{ env.FW }}/openwrt-msm89xx-*-ext4-sysupgrade.bin
             ${{ env.FW }}/openwrt-msm89xx-*-flash.sh
             ${{ env.FW }}/openwrt-msm89xx-*-firmware.zip
             ${{ env.FW }}/openwrt-msm89xx-*.manifest
