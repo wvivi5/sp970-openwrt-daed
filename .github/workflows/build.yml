@@ -135,6 +135,26 @@ jobs:
           ./up/apply_patches.sh openwrt
           # 先在上游目录应用 BTF 内核 config 改动，再挂进 openwrt
           ( cd up && /bin/sh "$GITHUB_WORKSPACE/overlay/scripts/apply-daed-config.sh" )
+          # === ext4 单分区改造（免动设备分区表，2026-08-12 vivi 需求）===
+          # 上游默认 squashfs 双分区(rootfs+rootfs_data)+生成 gpt_both0.bin 会改设备分区表，
+          # 2/3 号(SP970V3)现有 HandsomeMod 是单块 ext4 可写根(/dev/mmcblk0p14 rw)，
+          # 为免刷机时重写 GPT(变砖风险)，改成 ext4 单分区输出，cmdline 保持 root=p14 rw。
+          MK=up/msm89xx/image/msm8916.mk
+          echo "=== 改造前 msm8916.mk Device/msm8916 ==="; sed -n '/define Device\/msm8916/,/^endef/p' "$MK"
+          # 1) CMDLINE: squashfs 只读 -> ext4 可写根
+          sed -i 's#root=/dev/mmcblk0p14 rootfstype=squashfs rootwait#root=/dev/mmcblk0p14 rootfstype=ext4 rw rootwait#' "$MK"
+          # 2) FEATURES / FILESYSTEMS: squashfs -> ext4
+          sed -i 's/^  FEATURES := squashfs/  FEATURES := ext4/' "$MK"
+          sed -i 's/^  FILESYSTEMS := squashfs/  FILESYSTEMS := ext4/g' "$MK"
+          # 3) system.img 产物: 生成 ext4 rootfs(不再 append-rootfs squashfs)
+          #    用 OpenWrt 内建 ext4 生成: 先 ext4 后追加 metadata
+          sed -i 's#^  IMAGE/system.img := append-rootfs | append-metadata#  IMAGE/system.img := append-rootfs | pad-to 64k | append-metadata#' "$MK"
+          # 4) 去掉会改分区表的 gpt_both0 artifact（保留 flash.sh/firmware.zip 供 EDL 备选）
+          sed -i 's/^  ARTIFACTS := squashfs-gpt_both0.bin flash.sh firmware.zip/  ARTIFACTS := flash.sh firmware.zip/' "$MK"
+          sed -i '/^  ARTIFACT\/squashfs-gpt_both0.bin := generate-squashfs-gpt/d' "$MK"
+          echo "=== 改造后 msm8916.mk Device/msm8916 ==="; sed -n '/define Device\/msm8916/,/^endef/p' "$MK"
+          echo "=== 确认 uz801 Device FILESYSTEMS ==="; sed -n '/define Device\/yiming-uz801v3/,/^endef/p' "$MK"
+          # === ext4 改造结束 ===
           mv up/msm89xx  openwrt/target/linux/msm89xx
           mv up/packages openwrt/package/msm8916
 
