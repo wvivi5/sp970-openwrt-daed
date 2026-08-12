@@ -4,7 +4,21 @@
 
 ---
 
-## 🔑 先搞清楚：能不能用 fastboot 无脑刷？（关键）
+## 🚧 待办（2026-08-12 定的方向，明天做）：改「ext4 单分区版」免动分区表
+
+用户要求：**保持设备现有分区表 100% 不变**，别用 EDL 重写 GPT。方案已验证可行——
+复刻 3 号机现状（`/dev/mmcblk0p14 on / type ext4 (rw)`，单块 ext4 可写根，无 rootfs_data）：
+
+- 改 Device 的 `IMAGES`：从 `squashfs 双分区 + gpt_both0.bin` → **ext4 单分区**（不再生成 gpt/rootfs_data）
+- boot cmdline 保持 `root=/dev/mmcblk0p14 rw rootwait`（与 3 号一致）
+- 刷法：`fastboot flash boot boot.img` + `fastboot flash rootfs rootfs.ext4`（或 SSH 内 `dd` 到 p14），**分区表一字不动，可回滚**
+- 待办：① 改 `.github/workflows/build.yml` 里 uz801 Device 的 IMAGES 为 ext4 单分区；② 触发 CI 出固件（盯 BTF/BPF 工具链坑）；③ 打包双击即刷包。
+
+> 依据：3 号(同款SP970V3)实测 `mount`/`cmdline` 就是单块 ext4；新固件内核 cmdline 本就是 `root=/dev/mmcblk0p14`，只是编译框架默认多生成了双分区 gpt。改单分区即彻底免动分区表。
+
+---
+
+## 🔑 参考：为什么默认的双分区版必须 EDL（分区表铁证）
 
 **结论：从 HandsomeMod / 原厂状态刷本固件，必须走 EDL，纯 fastboot 不行。**
 
