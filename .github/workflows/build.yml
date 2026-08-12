@@ -212,12 +212,28 @@ jobs:
           #   循环跑 0 次 → `<device>-images` 目标从未定义 → ARTIFACT(flash.sh)
           #   依赖它 → "No rule to make target 'yiming-uz801v3-images'"。
           # 修法：显式开 EXT4FS、关 SQUASHFS 根文件系统，再 defconfig 固化。
-          sed -i -e '/CONFIG_TARGET_ROOTFS_EXT4FS/d' -e '/CONFIG_TARGET_ROOTFS_SQUASHFS/d' .config
+          sed -i -e '/CONFIG_TARGET_ROOTFS_EXT4FS/d' -e '/CONFIG_TARGET_ROOTFS_SQUASHFS/d' -e '/CONFIG_TARGET_ROOTFS_PARTSIZE/d' .config
           cat >> .config <<'EOF'
           CONFIG_TARGET_ROOTFS_EXT4FS=y
           # CONFIG_TARGET_ROOTFS_SQUASHFS is not set
+          CONFIG_TARGET_ROOTFS_PARTSIZE=512
           EOF
           make defconfig
+          # === ext4 rootfs 分区尺寸：第8次失败根因 ===
+          # run 31623649459 失败在 make_ext4fs:
+          #   error: ext4_allocate_best_fit_partial: failed to allocate 777 blocks, out of space?
+          #   Size: 109051904 (=104MB, msm89xx target 默认 PARTSIZE)
+          # daed + Docker + BTF 的 rootfs 内容 > 104MB，装不下 → 编译在 image 阶段炸。
+          # 修法：显式 CONFIG_TARGET_ROOTFS_PARTSIZE=512（MB）。SP970 的 p14 根分区
+          # 实际远大于 512MB（HandsomeMod 单块 ext4 可写根），512MB ext4 单分区可容纳有余。
+          # make defconfig 可能因 target 不暴露该 prompt 而丢失，故这里再固化一次并校验。
+          sed -i -e '/CONFIG_TARGET_ROOTFS_PARTSIZE/d' .config
+          echo 'CONFIG_TARGET_ROOTFS_PARTSIZE=512' >> .config
+          make defconfig
+          echo "=== ext4 rootfs 分区尺寸确认（须 =512）==="
+          grep -E 'CONFIG_TARGET_ROOTFS_PARTSIZE' .config || true
+          grep -q '^CONFIG_TARGET_ROOTFS_PARTSIZE=512' .config \
+            || { echo "!! FATAL: PARTSIZE 未固化为 512，ext4 rootfs 仍会 out of space"; exit 1; }
           echo "=== 根文件系统选择确认（须 EXT4FS=y）==="
           grep -E 'CONFIG_TARGET_ROOTFS_EXT4FS|CONFIG_TARGET_ROOTFS_SQUASHFS' .config || true
           grep -q '^CONFIG_TARGET_ROOTFS_EXT4FS=y' .config \
