@@ -173,12 +173,15 @@ jobs:
           cd openwrt
           cat >> feeds.conf.default <<'EOF'
           src-git daede https://github.com/kenzok8/openwrt-daede
+src-git istore https://github.com/linkease/istore-ui.git
+src-git argon https://github.com/jerrykuku/luci-theme-argon.git
           EOF
           # 官方 feed 已在上一步 update+install；这里只补 daede feed
           ./scripts/feeds update daede
           # daede feed 里 dae(服务端) Makefile 在新版 OpenWrt 报错且我们不需要，
           # 只装 daed(客户端) + luci + vmlinux-btf，跳过 dae
           ./scripts/feeds install -p daede daed luci-app-daede vmlinux-btf || true
+./scripts/feeds install luci-app-store luci-theme-argon luci-app-argon-config luci-app-frpc luci-i18n-base-zh-cn || true
 
       - name: 生成 .config（uz801 基线 + 增量包）
         run: |
@@ -287,3 +290,4 @@ jobs:
             ${{ env.FW }}/openwrt-msm89xx-*-firmware.zip
             ${{ env.FW }}/openwrt-msm89xx-*.manifest
           if-no-files-found: error
+# Updated workflow for iStore, Argon, Chinese language, Modem/SIM, and frpc

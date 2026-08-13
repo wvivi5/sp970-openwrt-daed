@@ -1,0 +1,9 @@
+CURRENT_POLL_TARGET_RUN=31644460314
+# 说明：cron payload 内硬编码的 run id 已过期，每轮询请以本文件或 `gh run list --workflow=build.yml --limit 1` 最新 run 为准。
+# 历史:
+#   31612183682 -> failure: image Makefile 缺 yiming-uz801v3-images 规则(未开 EXT4FS)。已由 e5b9111 修复。
+#   31623649459 -> failure: make_ext4fs out-of-space(104MB PARTSIZE 装不下 daed+docker+BTF)。已由 7fcb64f 固化 ROOTFS_PARTSIZE=512MB 修复。
+#   31634725918 -> success 但 artifact 缺核心 rootfs: ext4 镜像实际产物是 .gz(ext4-boot.img.gz/-system.img.gz/-sysupgrade.bin.gz),
+#                  上传 glob 只匹配无 .gz 名 → 只传了 flash.sh/firmware.zip/manifest。第9坑=upload glob 不匹配 .gz。
+#                  已由 3d96aec 修复(glob 加 *，if-no-files-found=error 防静默漏传)并重触发。
+#   31644460314 -> in_progress (当前目标，glob 修复后重跑)。

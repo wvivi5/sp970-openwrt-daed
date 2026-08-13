@@ -1,20 +1,22 @@
 # SP970 ext4 编译轮询状态
 
-> 轮询 cron 无法自改 payload（restricted），故用本文件记录当前真实目标 run。
+## 当前 (2026-08-13 05:53 CST)
+- 目标 run: **31644460314** (in_progress, glob 修复后重跑)
+- 上一 run 31634725918: success 但 artifact 缺核心 rootfs 镜像
 
-## 当前目标 run
-- **RUN_ID = 31634725918**（ext4 PARTSIZE=512MB 修复重试，2026-08-12 19:51Z 触发）
-- 轮询时优先信任 `gh run list --workflow=build.yml --limit 1` 的最新 run。
+## 第9坑：upload glob 不匹配 .gz
+- ext4 镜像实际产物是 gzip: `ext4-boot.img.gz` / `ext4-system.img.gz` / `ext4-sysupgrade.bin.gz`
+- build.yml upload-artifact 的 path glob 写的是无 `.gz` 名 → 三个核心镜像全部漏传
+- `if-no-files-found: warn` → run 仍标 success，掩盖了漏传
+- 修复 3d96aec: glob 结尾加 `*` 匹配 .gz；`if-no-files-found: error` 防再次静默漏传
+- daed 已确认在 manifest (daed 2026.08.05-r8, docker 27.3.1, luci-app-daede)，但需从实际 rootfs 镜像核验 /usr/bin/daed
 
-## 历史
-- run **31612183682**: FAILED @ 编译。已修复（commit e5b9111：启用 EXT4FS）。
-- run **31623649459**: FAILED @ 编译 image 阶段 `make_ext4fs: out of space`（rootfs 104MB 默认装不下 daed+Docker+BTF）。
-- 修复 commit `7fcb64f`: 固化 `CONFIG_TARGET_ROOTFS_PARTSIZE=512`（MB），并加校验门禁。触发 → run 31634725918。
+## 踩坑历史
+1-6. BTF/BPF 工具链 (clang/pahole/config choice/磁盘)
+7. ext4: yiming-uz801v3-images 规则缺失 (未开 EXT4FS) → e5b9111
+8. ext4: make_ext4fs out-of-space (104MB PARTSIZE) → 7fcb64f 固化 512MB
+9. upload glob 不匹配 .gz → 3d96aec
 
-## success 时动作（针对最新 run）
-1. `gh run download <RUN_ID> -D /tmp/sp970-ext4/`
-2. ext4 rootfs 核验 `/usr/bin/daed` 存在
-3. 确认 boot cmdline = `root=/dev/mmcblk0p14 rootfstype=ext4 rw`
-4. 打包双击即刷零安装包（ext4 单分区免动分区表）
-5. 汇报用户 + 附包路径
-6. 删除本轮询 cron（name=SP970 ext4编译轮询）
+## 注意
+- isolated cron run 无法 update 自身 payload（restricted）。payload 内硬编码 run id 已过期。
+- **以 POLL_TARGET.txt 的 CURRENT_POLL_TARGET_RUN 为准**（本文件同步）。
