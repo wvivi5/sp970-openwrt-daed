@@ -13,6 +13,8 @@ on:
         default: uz801
         type: choice
         options: [uz801, uf02]
+  push:
+    branches: [ master ]
 
 env:
   TZ: Asia/Shanghai
@@ -43,11 +45,6 @@ jobs:
       - name: 清盘 + 装依赖
         env: { DEBIAN_FRONTEND: noninteractive }
         run: |
-          # 第5次失败根因(新坑，非BPF/pahole)：编到 target/linux 时 / 分区被写满
-          #   → "config.guess: cannot create a temporary directory in /tmp"
-          #   → "awk: No space left on device" → target/linux failed to build。
-          # GitHub 托管 runner 的 / 只有 ~14G 空闲；完整 OpenWrt(内核+Docker+BTF+daed+passwall)
-          # 轻松超过。修法两条腿：①更狠地删预装大件；②把 openwrt 构建目录搬到 /mnt(~70G空闲)。
           echo "=== 清盘前 ==="; df -h /
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                       /opt/hostedtoolcache/CodeQL /usr/local/.ghcup \
@@ -60,7 +57,6 @@ jobs:
           sudo apt-get -qq autoremove -y 2>/dev/null || true
           sudo docker image prune --all --force || true
           sudo swapoff -a || true; sudo rm -f /mnt/swapfile || true
-          # /mnt 通常有 ~70G 空闲；把整个 workspace 构建根挪过去（用绑定挂载最省事）
           sudo mkdir -p /mnt/gh-build
           sudo chown "$USER:$USER" /mnt/gh-build
           echo "=== 清盘后 ==="; df -h / /mnt
@@ -72,17 +68,6 @@ jobs:
         run: |
           sudo -E apt-get -qq update
           sudo -E ./up/devenv/dependencies.sh
-          # daed/bpf-headers 需要 LLVM/clang>=12 编译 eBPF；上游 dependencies.sh 不装
-          # （原版不带 daed）。Ubuntu22.04 无裸包名 clang/llvm/lld，只有带版本号的。
-          # bpf.mk 检测 clang/clang-13/clang-12，装 clang-14 并建软链让它找得到。
-          # 内核 BTF 编码(vmlinux-btf/pahole)需 pahole，由 dwarves 包提供。
-          # ⚠️ 第6次失败根因(新坑)：E: Unable to locate package clang-14 / llvm-14。
-          #   clang-14/llvm-14/lld-14 都在 jammy 的 universe 组件；上一版把
-          #   `add-apt-repository universe` + apt update 放在 clang-14 install 之后，
-          #   等门要用的时候仓库元数据还没就绪 → 定位不到包。
-          #   另外「清盘」步骤 purge 了 '^llvm-1[0-9].*'，把 runner 预装的 llvm 也删了，
-          #   更依赖 universe 元数据是最新的。
-          # 修法：先启用 universe + update，再装 clang-14/llvm-14/lld-14 与 dwarves/pahole。
           sudo add-apt-repository -y universe 2>/dev/null || true
           sudo -E apt-get -qq update
           sudo -E apt-get -qq install -y clang-14 llvm-14 lld-14
@@ -99,7 +84,6 @@ jobs:
 
       - name: 克隆官方 OpenWrt
         run: |
-          # 构建体量大，clone 到 /mnt(空间足)，再软链回 workspace 让后续 `cd openwrt` 不变
           git clone https://git.openwrt.org/openwrt/openwrt.git /mnt/gh-build/openwrt
           ln -sfn /mnt/gh-build/openwrt openwrt
           git -C openwrt checkout ${{ needs.resolve-version.outputs.openwrt_version }}
@@ -108,94 +92,59 @@ jobs:
       - name: 硬 patch include/bpf.mk（把 /invalid/ 兜底路径改成真 clang，绕过 config choice）
         run: |
           cd openwrt
-          # 真根因：make defconfig 每次都把 BPF_TOOLCHAIN choice 反选回默认(NONE/未选)，
-          # 于是 bpf.mk 落到 else 分支 CLANG:=/invalid/clang → "version too old, found: ."。
-          # config 层面(HOST=y)压不住 defconfig 的反选，唯一可靠办法是直接改源码：
-          # 把兜底的 /invalid/ 前缀替换成 /usr/bin/（我们已 ln -sf clang-14 -> /usr/bin/clang）。
           echo "--- patch 前 bpf.mk 里的 /invalid 出现处 ---"
           grep -n "/invalid" include/bpf.mk || echo "(无 /invalid，可能上游改了写法)"
-          # 上次失败根因（第3次）：真实写法是 `LLVM_PATH:=/invalid`（裸 /invalid，无尾斜杠），
-          # 后面才拼成 $(LLVM_PATH)/clang。旧 sed 只替换带尾斜杠的 `/invalid/`，一次都没命中，
-          # 于是 patch 后 bpf.mk 仍是 /invalid → 门禁 exit 1。
-          # 修法：直接把整行 LLVM_PATH 赋值改成 /usr/bin，并兜底再替换裸 /invalid。
           sed -i -E 's#^([[:space:]]*LLVM_PATH[[:space:]]*:?=).*#\1/usr/bin#' include/bpf.mk
           sed -i 's#/invalid/#/usr/bin/#g; s#/invalid#/usr/bin#g' include/bpf.mk
           echo "--- patch 后 ---"
           grep -n "LLVM_PATH\|/usr/bin/clang\|/usr/bin/llvm\|/invalid" include/bpf.mk || true
-          # 立即自检：patch 后绝不允许再有 /invalid 残留
           if grep -q '/invalid' include/bpf.mk; then
             echo "!! FATAL: patch 后 bpf.mk 仍残 /invalid"; grep -n '/invalid' include/bpf.mk; exit 1
           fi
-          # 兜底自检：确保 /usr/bin/clang 真存在且版本 >=12
           /usr/bin/clang --version | head -1
 
       - name: 挂 msm89xx target + apply_patches(wcn36xx) + 应用 BTF config
         run: |
           chmod +x up/apply_patches.sh
           ./up/apply_patches.sh openwrt
-          # 先在上游目录应用 BTF 内核 config 改动，再挂进 openwrt
           ( cd up && /bin/sh "$GITHUB_WORKSPACE/overlay/scripts/apply-daed-config.sh" )
-          # === ext4 单分区改造（免动设备分区表，2026-08-12 vivi 需求）===
-          # 上游默认 squashfs 双分区(rootfs+rootfs_data)+生成 gpt_both0.bin 会改设备分区表，
-          # 2/3 号(SP970V3)现有 HandsomeMod 是单块 ext4 可写根(/dev/mmcblk0p14 rw)，
-          # 为免刷机时重写 GPT(变砖风险)，改成 ext4 单分区输出，cmdline 保持 root=p14 rw。
           MK=up/msm89xx/image/msm8916.mk
           echo "=== 改造前 msm8916.mk Device/msm8916 ==="; sed -n '/define Device\/msm8916/,/^endef/p' "$MK"
-          # 1) CMDLINE: squashfs 只读 -> ext4 可写根
           sed -i 's#root=/dev/mmcblk0p14 rootfstype=squashfs rootwait#root=/dev/mmcblk0p14 rootfstype=ext4 rw rootwait#' "$MK"
-          # 2) FEATURES / FILESYSTEMS: squashfs -> ext4
           sed -i 's/^  FEATURES := squashfs/  FEATURES := ext4/' "$MK"
           sed -i 's/^  FILESYSTEMS := squashfs/  FILESYSTEMS := ext4/g' "$MK"
-          # 3) system.img 产物: 生成 ext4 rootfs(不再 append-rootfs squashfs)
-          #    用 OpenWrt 内建 ext4 生成: 先 ext4 后追加 metadata
           sed -i 's#^  IMAGE/system.img := append-rootfs | append-metadata#  IMAGE/system.img := append-rootfs | pad-to 64k | append-metadata#' "$MK"
-          # 4) 去掉会改分区表的 gpt_both0 artifact（保留 flash.sh/firmware.zip 供 EDL 备选）
           sed -i 's/^  ARTIFACTS := squashfs-gpt_both0.bin flash.sh firmware.zip/  ARTIFACTS := flash.sh firmware.zip/' "$MK"
           sed -i '/^  ARTIFACT\/squashfs-gpt_both0.bin := generate-squashfs-gpt/d' "$MK"
           echo "=== 改造后 msm8916.mk Device/msm8916 ==="; sed -n '/define Device\/msm8916/,/^endef/p' "$MK"
           echo "=== 确认 uz801 Device FILESYSTEMS ==="; sed -n '/define Device\/yiming-uz801v3/,/^endef/p' "$MK"
-          # === ext4 改造结束 ===
           mv up/msm89xx  openwrt/target/linux/msm89xx
           mv up/packages openwrt/package/msm8916
 
       - name: 先装官方 feed（daed/daede 的 Makefile 会 include feeds/packages/lang/golang）
         run: |
           cd openwrt
-          # 关键：daed/dae 的 Makefile 里
-          #   include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
-          # 必须先把官方 packages/luci feed update+install 好，否则 install 收集包信息时
-          # 该 include 路径不存在 → "please fix Makefile"（上一次失败根因）。
           ./scripts/feeds update -a
           ./scripts/feeds install -a
 
-      - name: 加 daed feed（第2版：已去 Passwall）
+      - name: 加 daed / Argon / iStore feed
         run: |
           cd openwrt
           cat >> feeds.conf.default <<'EOF'
           src-git daede https://github.com/kenzok8/openwrt-daede
-src-git istore https://github.com/linkease/istore-ui.git
-src-git argon https://github.com/jerrykuku/luci-theme-argon.git
+          src-git istore https://github.com/linkease/istore-ui.git
+          src-git argon https://github.com/jerrykuku/luci-theme-argon.git
           EOF
-          # 官方 feed 已在上一步 update+install；这里只补 daede feed
-          ./scripts/feeds update daede
-          # daede feed 里 dae(服务端) Makefile 在新版 OpenWrt 报错且我们不需要，
-          # 只装 daed(客户端) + luci + vmlinux-btf，跳过 dae
+          ./scripts/feeds update daede istore argon
           ./scripts/feeds install -p daede daed luci-app-daede vmlinux-btf || true
-./scripts/feeds install luci-app-store luci-theme-argon luci-app-argon-config luci-app-frpc luci-i18n-base-zh-cn || true
+          ./scripts/feeds install luci-app-store luci-theme-argon luci-app-argon-config luci-app-frpc luci-i18n-base-zh-cn || true
 
       - name: 生成 .config（uz801 基线 + 增量包）
         run: |
           cd openwrt
           cp "$GITHUB_WORKSPACE/up/diffconfig_uz801" .config 2>/dev/null || cp ../up/diffconfig_uz801 .config
-          # 追加 daed+passwall+docker 增量包
           /bin/sh "$GITHUB_WORKSPACE/overlay/scripts/apply-daed-config.sh" "$PWD"
           make defconfig
-          # --- 强制 BPF 工具链走宿主机 clang ---
-          # 上次失败根因（第2次）：注入 CONFIG_BPF_TOOLCHAIN_HOST=y 后 make defconfig 把它丢了，
-          # 因为 toolchain/Config.in 里 choice "BPF_TOOLCHAIN" 带 `prompt ... if DEVEL`：
-          # 没开 CONFIG_DEVEL 时该 choice 不可选，defconfig 会按默认重算 → 三个 USE_LLVM_* 全空
-          # → bpf.mk 落入 else 分支 LLVM_PATH=/invalid → /invalid/clang。
-          # 修法：开 CONFIG_DEVEL=y 让 choice 生效，并显式 select USE_LLVM_HOST。
           sed -i -e '/CONFIG_BPF_TOOLCHAIN_/d' -e '/CONFIG_USE_LLVM_/d' -e '/CONFIG_DEVEL[= ]/d' .config
           cat >> .config <<'EOF'
           CONFIG_DEVEL=y
@@ -207,14 +156,6 @@ src-git argon https://github.com/jerrykuku/luci-theme-argon.git
           # CONFIG_BPF_TOOLCHAIN_NONE is not set
           EOF
           make defconfig
-          # === ext4 单分区根：必须启用 CONFIG_TARGET_ROOTFS_EXT4FS ===
-          # 第7次失败根因：Device FILESYSTEMS 改成 ext4 后，image.mk 的
-          #   $(foreach fs,$(filter ...,$(TARGET_FILESYSTEMS)),$(FILESYSTEMS)) 循环
-          #   会用 TARGET_FILESYSTEMS 过滤 device 的 FILESYSTEMS。若 .config 里
-          #   CONFIG_TARGET_ROOTFS_EXT4FS 未开，TARGET_FILESYSTEMS 不含 ext4，
-          #   循环跑 0 次 → `<device>-images` 目标从未定义 → ARTIFACT(flash.sh)
-          #   依赖它 → "No rule to make target 'yiming-uz801v3-images'"。
-          # 修法：显式开 EXT4FS、关 SQUASHFS 根文件系统，再 defconfig 固化。
           sed -i -e '/CONFIG_TARGET_ROOTFS_EXT4FS/d' -e '/CONFIG_TARGET_ROOTFS_SQUASHFS/d' -e '/CONFIG_TARGET_ROOTFS_PARTSIZE/d' .config
           cat >> .config <<'EOF'
           CONFIG_TARGET_ROOTFS_EXT4FS=y
@@ -222,14 +163,6 @@ src-git argon https://github.com/jerrykuku/luci-theme-argon.git
           CONFIG_TARGET_ROOTFS_PARTSIZE=512
           EOF
           make defconfig
-          # === ext4 rootfs 分区尺寸：第8次失败根因 ===
-          # run 31623649459 失败在 make_ext4fs:
-          #   error: ext4_allocate_best_fit_partial: failed to allocate 777 blocks, out of space?
-          #   Size: 109051904 (=104MB, msm89xx target 默认 PARTSIZE)
-          # daed + Docker + BTF 的 rootfs 内容 > 104MB，装不下 → 编译在 image 阶段炸。
-          # 修法：显式 CONFIG_TARGET_ROOTFS_PARTSIZE=512（MB）。SP970 的 p14 根分区
-          # 实际远大于 512MB（HandsomeMod 单块 ext4 可写根），512MB ext4 单分区可容纳有余。
-          # make defconfig 可能因 target 不暴露该 prompt 而丢失，故这里再固化一次并校验。
           sed -i -e '/CONFIG_TARGET_ROOTFS_PARTSIZE/d' .config
           echo 'CONFIG_TARGET_ROOTFS_PARTSIZE=512' >> .config
           make defconfig
@@ -243,12 +176,9 @@ src-git argon https://github.com/jerrykuku/luci-theme-argon.git
             || { echo "!! FATAL: EXT4FS 根未启用，image.mk 不会生成 <device>-images 目标"; exit 1; }
           echo "=== BPF 工具链选择确认 ==="
           grep -E "BPF_TOOLCHAIN|USE_LLVM|CONFIG_DEVEL" .config || true
-          # 快速失败门禁已降级为软警告：真正保障靠第74步源码 patch（bpf.mk 写死 /usr/bin/clang），
-          # config 层的 USE_LLVM_HOST 只是二重保险；即使未勾也能编成，故不再 exit 1。
           grep -q '^CONFIG_USE_LLVM_HOST=y' .config \
             && echo "[ok] USE_LLVM_HOST 已生效（二重保险）" \
             || echo "[warn] USE_LLVM_HOST 未生效，依赖第74步 bpf.mk 源码 patch 兵底（已将 /invalid/ 改为 /usr/bin/）"
-          # 双保险：确认 bpf.mk 已被 patch（无 /invalid 残留）
           grep -q '/invalid' include/bpf.mk \
             && { echo "!! FATAL: bpf.mk 仍残 /invalid，第74步 patch 未生效"; grep -n '/invalid' include/bpf.mk; exit 1; } \
             || echo "[ok] bpf.mk 已无 /invalid 残留"
@@ -279,9 +209,6 @@ src-git argon https://github.com/jerrykuku/luci-theme-argon.git
         uses: actions/upload-artifact@v4
         with:
           name: sp970-daed-docker-${{ needs.resolve-version.outputs.openwrt_version }}-${{ env.FILE_DATE }}
-          # 第9坑: ext4 镜像实际产物是 .gz(ext4-boot.img.gz/-system.img.gz/-sysupgrade.bin.gz),
-          # 原 glob 只匹配无 .gz 名 → run 31634725918 虽 success 但 artifact 只有 flash.sh/zip/manifest,
-          # 核心 ext4 rootfs 镜像漏传。改为同时匹配压缩/未压缩两种命名。
           path: |
             ${{ env.FW }}/openwrt-msm89xx-*-ext4-boot.img*
             ${{ env.FW }}/openwrt-msm89xx-*-ext4-system.img*
@@ -290,4 +217,3 @@ src-git argon https://github.com/jerrykuku/luci-theme-argon.git
             ${{ env.FW }}/openwrt-msm89xx-*-firmware.zip
             ${{ env.FW }}/openwrt-msm89xx-*.manifest
           if-no-files-found: error
-# Updated workflow for iStore, Argon, Chinese language, Modem/SIM, and frpc
